@@ -1,5 +1,5 @@
 /*
-*	[L4D2] Ladder Server Crash - Fix
+*	[L4D2] Ladder Server Crash - Patch Fix
 *	Copyright (C) 2022 Silvers
 *
 *	This program is free software: you can redistribute it and/or modify
@@ -18,19 +18,23 @@
 
 
 
-#define PLUGIN_VERSION 		"1.0"
+#define PLUGIN_VERSION 		"1.1"
 
 /*======================================================================================
 	Plugin Info:
 
-*	Name	:	[L4D2] Ladder Server Crash - Fix
+*	Name	:	[L4D2] Ladder Server Crash - Patch Fix
 *	Author	:	SilverShot
-*	Descrp	:	Fixes a server crash from NavLadder::GetPosAtHeight.
+*	Descrp	:	Fixes a server crash from NavLadder::GetPosAtHeight. Patches out AvoidNeighbors.
 *	Link	:	https://forums.alliedmods.net/showthread.php?t=336298
 *	Plugins	:	https://sourcemod.net/plugins.php?exact=exact&sortby=title&search=1&author=Silvers
 
 ========================================================================================
 	Change Log:
+
+1.1 (12-Feb-2022)
+	- Detour method scrapped in favour of patching out calls to 'AvoidNeighbors' function.
+	- Plugin and GameData file updated.
 
 1.0 (10-Feb-2022)
 	- Official release.
@@ -54,24 +58,24 @@
 
 #include <sourcemod>
 #include <sdktools>
-#include <dhooks>
-#include <MemoryEx>
+// #include <dhooks>
+// #include <MemoryEx>
 
 #define GAMEDATA			"l4d2_ladder_patch"
 
-#define DEBUG				0 // 0=Off. 1=Log the map and ladder position and which error was detected. Saved to "logs/ladder_patch.log"
+// #define DEBUG				1 // 0=Off. 1=Log the map and ladder position and which error was detected. Saved to "logs/ladder_patch.log"
 
-#define LINUX				0
-#define WINDOWS				1
+// #define LINUX				0
+// #define WINDOWS				1
 
-int g_iOffset;
+// int g_iOffset;
 // int g_iOS;
 
 public Plugin myinfo =
 {
-	name = "[L4D2] Ladder Server Crash - Fix",
+	name = "[L4D2] Ladder Server Crash - Patch Fix",
 	author = "SilverShot and Peace-Maker",
-	description = "Fixes a server crash from NavLadder::GetPosAtHeight.",
+	description = "Fixes a server crash from NavLadder::GetPosAtHeight. Patches out AvoidNeighbors.",
 	version = PLUGIN_VERSION,
 	url = "https://forums.alliedmods.net/showthread.php?t=336298"
 }
@@ -87,6 +91,48 @@ public void OnPluginStart()
 	GameData hGameData = LoadGameConfigFile(GAMEDATA);
 	if( hGameData == null ) SetFailState("Failed to load \"%s.txt\" gamedata.", GAMEDATA);
 
+	int byte;
+	int offset;
+	Address patch;
+
+	// Patch 1
+	offset = GameConfGetOffset(hGameData, "Patch_ChaseVictim");
+	patch = GameConfGetAddress(hGameData, "ChaseVictim::Update");
+	if( !patch ) SetFailState("Error finding the \"ChaseVictim::Update\" signature.");
+
+	byte = LoadFromAddress(patch + view_as<Address>(offset), NumberType_Int8);
+	if( byte == 0xE8 )
+	{
+		for( int i = 0; i < 5; i++ )
+			StoreToAddress(patch + view_as<Address>(offset + i), 0x90, NumberType_Int8);
+	}
+	else if( byte != 0x90 )
+	{
+		SetFailState("Error: the \"Patch_ChaseVictim\" offset %d is incorrect.", offset);
+	}
+
+	// Patch 2
+	offset = GameConfGetOffset(hGameData, "Patch_InfectedFlee");
+	patch = GameConfGetAddress(hGameData, "InfectedFlee::Update");
+	if( !patch ) SetFailState("Error finding the \"InfectedFlee::Update\" signature.");
+
+	byte = LoadFromAddress(patch + view_as<Address>(offset), NumberType_Int8);
+	if( byte == 0xE8 )
+	{
+		for( int i = 0; i < 5; i++ )
+			StoreToAddress(patch + view_as<Address>(offset + i), 0x90, NumberType_Int8);
+	}
+	else if( byte != 0x90 )
+	{
+		SetFailState("Error: the \"Patch_InfectedFlee\" offset %d is incorrect.", offset);
+	}
+
+	delete hGameData;
+
+
+
+	// Detour version - obsolete
+	/*
 	g_iOffset = hGameData.GetOffset("Crash_Offset");
 	if( g_iOffset == -1 ) SetFailState("Failed to find \"%s.txt\" offset.", GAMEDATA);
 
@@ -104,7 +150,8 @@ public void OnPluginStart()
 
 	delete hDetour;
 
-	CheckInitPEB(); 
+	CheckInitPEB();
+	// */
 }
 
 
@@ -112,6 +159,8 @@ public void OnPluginStart()
 // ====================================================================================================
 // Detour
 // ====================================================================================================
+// Detour version - obsolete
+/*
 public MRESReturn GetPosAtHeight(int pThis, Handle hReturn, Handle hParams)
 {
 	// if( pThis == 0 || IsValidPointer(pThis) == false || (g_iOS == WINDOWS ? IsValidPointer(pThis + g_iOffset) == false : IsValidPointer(LOWORD(pThis) + g_iOffset) == false) )
@@ -128,15 +177,18 @@ public MRESReturn GetPosAtHeight(int pThis, Handle hReturn, Handle hParams)
 	if( bug )
 	{
 		#if DEBUG
-		float vPos[3];
 		static char sTemp[256];
 		GetCurrentMap(sTemp, sizeof(sTemp));
 
+		Format(sTemp, sizeof(sTemp), "%s %d", sTemp, bug);
+		LogCustom(sTemp);
+
+		float vPos[3];
 		vPos[0] = view_as<float>(LoadFromAddress(view_as<Address>(pThis + 4), NumberType_Int32));
 		vPos[1] = view_as<float>(LoadFromAddress(view_as<Address>(pThis + 8), NumberType_Int32));
 		vPos[2] = view_as<float>(LoadFromAddress(view_as<Address>(pThis + 12), NumberType_Int32)); 
 
-		Format(sTemp, sizeof(sTemp), "%s %d (%0.2f %0.2f %0.2f)", sTemp, bug, vPos[0], vPos[1], vPos[2]);
+		Format(sTemp, sizeof(sTemp), "(%0.2f %0.2f %0.2f)", vPos[0], vPos[1], vPos[2]);
 		LogCustom(sTemp);
 		#endif
 
@@ -169,3 +221,4 @@ void LogCustom(const char[] format, any ...)
 	delete file;
 }
 #endif
+// */
